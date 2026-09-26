@@ -1525,11 +1525,21 @@ export function getDriverInfo(): DbDriverInfo | null {
  * Idempotent — safe to call multiple times.
  */
 export async function ensureDbInitialized(): Promise<void> {
-  if (getDb()) return;
+  if (getDb()) {
+    if (!isBuildPhase) {
+      const { initializeRemotePersistence } = await import("./remotePersistence");
+      await initializeRemotePersistence(getDb()!);
+    }
+    return;
+  }
 
   // Cloud/build: getDbInstance() cria in-memory, sem necessidade de pré-init
   if (isCloud || isBuildPhase || !SQLITE_FILE) {
     getDbInstance();
+    if (!isBuildPhase) {
+      const { initializeRemotePersistence } = await import("./remotePersistence");
+      await initializeRemotePersistence(getDbInstance());
+    }
     return;
   }
 
@@ -1539,6 +1549,8 @@ export async function ensureDbInitialized(): Promise<void> {
     // Drivers síncronos disponíveis — fechar o probe, getDbInstance() vai abrir com setup completo
     sync.close();
     getDbInstance();
+    const { initializeRemotePersistence } = await import("./remotePersistence");
+    await initializeRemotePersistence(getDbInstance());
     return;
   }
 
@@ -1547,6 +1559,8 @@ export async function ensureDbInitialized(): Promise<void> {
   await preInitSqlJs(SQLITE_FILE);
   // Agora getSqlJsAdapter() retornará o adapter, e getDbInstance() vai usá-lo
   getDbInstance();
+  const { initializeRemotePersistence } = await import("./remotePersistence");
+  await initializeRemotePersistence(getDbInstance());
 }
 
 // ──────────────── JSON → SQLite Migration ────────────────
@@ -1607,8 +1621,7 @@ function migrateFromJson(db: SqliteDatabase, jsonPath: string) {
         let rateLimitOverridesJson = serializeJsonField(conn.rateLimitOverrides);
         if (!hasOverrides && typeof conn.id === "string") {
           const existing = selectExistingOverrides.get(conn.id) as
-            | { rate_limit_overrides_json: string | null }
-            | undefined;
+            { rate_limit_overrides_json: string | null } | undefined;
           if (existing) rateLimitOverridesJson = existing.rate_limit_overrides_json;
         }
         insertConn.run({
